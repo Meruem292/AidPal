@@ -1,0 +1,7 @@
+{
+  "name": "AidPal - Friendly AI Health Companion",
+  "description": "A quick medical response app that identifies wound types and provides basic first aid guidance using AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
