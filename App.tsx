@@ -1,8 +1,7 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Image as ImageIcon, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope } from 'lucide-react';
-import { analyzeWound } from './geminiService';
-import { AnalysisResult, HistoryItem } from './types';
+import { Camera, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope, Image as ImageIcon } from 'lucide-react';
+import { analyzeWound } from './geminiService.ts';
+import { AnalysisResult, HistoryItem } from './types.ts';
 
 const App: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
@@ -44,8 +43,8 @@ const App: React.FC = () => {
       const updatedHistory = [newHistoryItem, ...history];
       setHistory(updatedHistory);
       localStorage.setItem('aidpal_history', JSON.stringify(updatedHistory));
-    } catch (err) {
-      setError('Oopsie! I couldn\'t see it clearly. Try again?');
+    } catch (err: any) {
+      setError(err?.message || 'Oopsie! I couldn\'t see it clearly. Try again?');
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -61,7 +60,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const saved = localStorage.getItem('aidpal_history');
-    if (saved) setHistory(JSON.parse(saved));
+    if (saved) {
+      try {
+        setHistory(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse history", e);
+      }
+    }
   }, []);
 
   return (

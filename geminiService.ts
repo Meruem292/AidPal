@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { z } from "zod";
-import { AnalysisResult } from "./types";
+import { AnalysisResult } from "./types.ts";
 
 /**
  * Zod schema to strictly validate the model's output.
@@ -61,23 +61,17 @@ WOUNDS & SKIN INJURIES PROTOCOLS (102 Total):
 `;
 
 /**
- * Expanded list of multimodal models to maximize availability and bypass RPD/RPM limits.
- * We prioritize Flash models for speed and cost, then fallback to Pro for depth.
+ * Optimized list of available multimodal models.
  */
 const MODELS_TO_TRY = [
-  'gemini-3-flash-preview',                        // Primary: Fastest Gemini 3
-  'gemini-2.5-flash-native-audio-preview-12-2025', // Reliable Vision fallback
-  'gemini-flash-lite-latest',                      // High-throughput fallback
-  'gemini-3-pro-preview',
-  'gemini-2.5-pro',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite'
-                            // Final: Most powerful reasoning
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash-native-audio-preview-12-2025',
+  'gemini-flash-lite-latest',
+  'gemini-3-pro-preview'
 ];
 
 /**
  * AidPal Analysis Service with Extended Model Fallback.
- * Attempts each model in order if the previous one fails due to rate limits or capacity.
  */
 export const analyzeWound = async (base64Image: string, context: string): Promise<AnalysisResult> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -96,10 +90,10 @@ export const analyzeWound = async (base64Image: string, context: string): Promis
 
   for (const modelName of MODELS_TO_TRY) {
     try {
-      console.log(`AidPal: Calling health buddy "${modelName}"...`);
+      console.log(`AidPal: Attempting ${modelName}...`);
       
       const promptPart = {
-        text: `You are AidPal, a friendly and expert health buddy. Analyze this medical image.
+        text: `You are AidPal, a friendly health buddy. Analyze this medical image.
         
         KNOWLEDGE BASE:
         ${MEDICAL_PDF_KNOWLEDGE}
@@ -107,12 +101,10 @@ export const analyzeWound = async (base64Image: string, context: string): Promis
         USER CONTEXT: ${context || "None provided."}
         
         INSTRUCTIONS:
-        1. Identify the condition clearly based on the image and user context. 
-        2. Strictly follow the KNOWLEDGE BASE protocols for step-by-step first aid.
-        3. Return ONLY a valid JSON object. 
-        4. Do not include any text outside the JSON.
-        5. Mention you are an AI health buddy, not a doctor.
-        6. Disclaimer: "I'm a robot buddy, not a doc! This is not a professional diagnosis."
+        1. Identify the condition clearly. 
+        2. Follow the KNOWLEDGE BASE protocols for first aid.
+        3. Return ONLY a valid JSON object.
+        4. Disclaimer: "I'm a robot buddy, not a doc! This is not a professional diagnosis."
 
         REQUIRED JSON STRUCTURE:
         {
@@ -136,52 +128,22 @@ export const analyzeWound = async (base64Image: string, context: string): Promis
       });
 
       const resultText = response.text;
-      if (!resultText) {
-        throw new Error("Received an empty response from the AI buddy.");
-      }
+      if (!resultText) throw new Error("Empty response");
 
-      // Sanitize output for potential markdown code blocks
       let cleanJson = resultText.trim();
       const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        cleanJson = jsonMatch[0];
-      }
+      if (jsonMatch) cleanJson = jsonMatch[0];
       
       const parsedData = JSON.parse(cleanJson);
-      const validatedResult = AnalysisResultSchema.parse(parsedData);
-      
-      console.log(`AidPal: Health buddy "${modelName}" successfully completed the report.`);
-      return validatedResult as AnalysisResult;
+      return AnalysisResultSchema.parse(parsedData) as AnalysisResult;
 
     } catch (error: any) {
       lastError = error;
-      const statusCode = error?.status || error?.code;
-      
-      console.warn(`AidPal: Health buddy "${modelName}" failed. Reason: ${error?.message || 'Unknown'}. Status: ${statusCode}`);
-      
-      // If we hit rate limits (429) or other temporary issues, try the next model.
-      // If we hit a 404 (Not Found), it might be a configuration issue, so we skip to next too.
-      if (statusCode === 429 || statusCode === 404 || statusCode === 503) {
-        console.log(`AidPal: Switching to the next available buddy due to status ${statusCode}...`);
-        continue;
-      }
-      
-      // For other critical errors, we might still want to try the fallback just in case.
+      const status = error?.status || error?.code;
+      if (status === 429 || status === 404 || status === 503) continue;
       continue;
     }
   }
 
-  // All models failed
-  console.error("AidPal Service Critical Failure: All AI health buddies failed to respond.", lastError);
-  
-  const status = lastError?.status || lastError?.code;
-  if (status === 429) {
-    throw new Error("I've been a bit too busy helping others! 🧘 Please take a deep breath and try again in a minute.");
-  }
-  
-  if (status === 404) {
-    throw new Error("My medical database is currently undergoing maintenance. 🩺 Please check back in a few minutes!");
-  }
-
-  throw new Error("All my health buddies are currently busy or unavailable. 🏥 Let's try one more snap in a bit!");
+  throw new Error(lastError?.message || "All AI buddies are currently busy. Try again in a minute! 🏥");
 };
