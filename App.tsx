@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope, Image as ImageIcon, RefreshCw } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope, Image as ImageIcon } from 'lucide-react';
 import { analyzeWound } from './geminiService.ts';
 import { AnalysisResult, HistoryItem } from './types.ts';
 
@@ -7,19 +7,15 @@ const App: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  // Camera Modal State
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
-  
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Load history from localStorage
   useEffect(() => {
@@ -33,92 +29,78 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Camera handling
-  const startCamera = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facingMode, width: { ideal: 1080 }, height: { ideal: 1080 } },
-        audio: false
-      });
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setIsCameraOpen(true);
-      setError(null);
-    } catch (err) {
-      console.error("Camera error:", err);
-      setError("I couldn't access your camera! Please check permissions. 📸");
-    }
-  }, [facingMode]);
+  // Pro-Grade Image Processing: Essential for Standalone APK Stability
+  const processImage = (file: File) => {
+    setIsProcessingImage(true);
+    setError(null);
+    const reader = new FileReader();
+    
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-  const stopCamera = useCallback(() => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
-    setIsCameraOpen(false);
-  }, [cameraStream]);
+        // APK SAFE DIMENSION: 1024px is the sweet spot for Gemini analysis and memory safety
+        const TARGET_SIZE = 1024;
+        let width = img.width;
+        let height = img.height;
 
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      
-      if (context) {
-        // Set canvas to square crop
-        const size = Math.min(video.videoWidth, video.videoHeight);
-        canvas.width = size;
-        canvas.height = size;
+        if (width > height) {
+          if (width > TARGET_SIZE) {
+            height *= TARGET_SIZE / width;
+            width = TARGET_SIZE;
+          }
+        } else {
+          if (height > TARGET_SIZE) {
+            width *= TARGET_SIZE / height;
+            height = TARGET_SIZE;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
         
-        const startX = (video.videoWidth - size) / 2;
-        const startY = (video.videoHeight - size) / 2;
-        
-        context.drawImage(video, startX, startY, size, size, 0, 0, size, size);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        // Draw image to canvas with smoothing
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Export as compressed JPEG to avoid "Black Screen" in limited-memory APK containers
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         setImage(dataUrl);
-        stopCamera();
-        setError(null);
-      }
-    }
-  };
-
-  const switchCamera = () => {
-    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-    stopCamera();
-    // Restarting is handled by the useEffect watching facingMode/isCameraOpen
-  };
-
-  useEffect(() => {
-    if (isCameraOpen) {
-      startCamera();
-    }
-    return () => {
-      // Cleanup stream on unmount
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
+        setIsProcessingImage(false);
+      };
+      img.onerror = () => {
+        setError("Ouch! I couldn't load that photo. Please try again.");
+        setIsProcessingImage(false);
+      };
+      img.src = event.target?.result as string;
     };
-  }, [isCameraOpen, facingMode]);
+    reader.onerror = () => {
+      setError("Storage error. Please check your permissions.");
+      setIsProcessingImage(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-        setError(null);
-      };
-      reader.readAsDataURL(file);
+      processImage(file);
+      // Clear value so user can pick the same file again if they want
+      e.target.value = '';
     }
   };
 
   const handleScan = async () => {
     if (!image) {
-      setIsCameraOpen(true);
+      cameraCaptureRef.current?.click();
       return;
     }
+    
     setIsLoading(true);
     setError(null);
     try {
@@ -134,7 +116,7 @@ const App: React.FC = () => {
       setHistory(updatedHistory);
       localStorage.setItem('aidpal_history', JSON.stringify(updatedHistory));
     } catch (err: any) {
-      setError(err?.message || 'Oopsie! I couldn\'t see it clearly. Try again?');
+      setError(err?.message || 'The AI is a bit shy right now. Check your internet?');
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -149,20 +131,20 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center p-4 pb-24 md:p-8 relative overflow-hidden">
+    <div className="min-h-full flex flex-col items-center p-6 pb-24 relative select-none">
       {/* Background Decorative Blobs */}
-      <div className="absolute top-[-10%] left-[-20%] w-64 h-64 bg-yellow-400 opacity-20 blob -z-10 blur-xl"></div>
-      <div className="absolute bottom-[5%] right-[-10%] w-80 h-80 bg-red-400 opacity-20 blob -z-10 blur-xl"></div>
+      <div className="fixed top-[-5%] left-[-10%] w-64 h-64 bg-yellow-400 opacity-20 blob -z-10 blur-2xl pointer-events-none"></div>
+      <div className="fixed bottom-[10%] right-[-5%] w-80 h-80 bg-red-400 opacity-20 blob -z-10 blur-2xl pointer-events-none"></div>
 
       {/* Header */}
-      <div className="w-full max-w-md flex justify-between items-center mb-10 z-10 animate-pop" style={{ animationDelay: '0.1s' }}>
-        <div className="bg-white border-[3px] border-black rounded-full py-2 px-6 flex items-center gap-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+      <div className="w-full max-w-md flex justify-between items-center mb-8 z-10 animate-pop">
+        <div className="bg-white border-[3px] border-black rounded-full py-2.5 px-6 flex items-center gap-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
           <div className="bg-[#FFD100] p-1.5 rounded-full border-2 border-black">
             <Heart className="w-5 h-5 text-[#7C3AED] fill-[#7C3AED]" />
           </div>
           <div className="flex flex-col">
             <span className="font-fredoka font-bold text-xl leading-tight text-[#2D3436]">AidPal</span>
-            <span className="text-[10px] font-black text-[#7C3AED] tracking-widest uppercase">Health Buddy</span>
+            <span className="text-[10px] font-black text-[#7C3AED] tracking-widest uppercase">AI APK v1.0</span>
           </div>
         </div>
         
@@ -175,177 +157,144 @@ const App: React.FC = () => {
       </div>
 
       {/* Main Content */}
-      <div className="w-full max-w-md flex flex-col items-center space-y-10 z-10">
+      <div className="w-full max-w-md flex flex-col items-center space-y-8 z-10">
         
-        {/* Floating Emojis Decoration */}
-        <div className="flex justify-around w-full px-10 absolute pointer-events-none opacity-50">
-           <span className="text-4xl animate-float" style={{ animationDelay: '0s' }}>🩹</span>
-           <span className="text-4xl animate-float" style={{ animationDelay: '2s' }}>🩺</span>
-           <span className="text-4xl animate-float" style={{ animationDelay: '4s' }}>💊</span>
-        </div>
-
-        {/* Badge */}
-        <div className="bg-[#FFD100] text-black border-2 border-black px-6 py-2 rounded-full font-fredoka font-black text-sm uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] animate-bounce">
-           ✨ 100% Magic AI ✨
-        </div>
-
         {/* Title */}
-        <div className="text-center animate-pop" style={{ animationDelay: '0.2s' }}>
-          <h1 className="text-white font-fredoka text-4xl font-black mb-3 [text-shadow:4px_4px_0px_#000]">
-            Let's Fix That!
+        <div className="text-center animate-pop">
+          <h1 className="text-white font-fredoka text-4xl font-black mb-2 [text-shadow:4px_4px_0px_#000]">
+            Let's Fix It!
           </h1>
-          <p className="text-white font-fredoka font-medium text-lg max-w-xs mx-auto">
-            Take a snap of your ouchie and I'll help you feel better! 🚀
+          <p className="text-white font-fredoka font-medium text-lg max-w-xs mx-auto opacity-90 leading-tight">
+            Use your camera or pick a photo from your device! 🩹
           </p>
         </div>
 
         {/* Scan Area */}
-        <div className="relative group animate-pop" style={{ animationDelay: '0.3s' }}>
-            <div className="absolute -top-5 -right-5 bg-[#FF6B6B] text-white text-xs font-black px-4 py-2 rounded-xl rotate-12 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-20">
-              CLICK ME!
-            </div>
+        <div className="relative group animate-pop">
+            {!image && !isProcessingImage && (
+              <div className="absolute -top-4 -right-4 bg-[#FF6B6B] text-white text-xs font-black px-4 py-2 rounded-xl rotate-12 border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-20 pointer-events-none">
+                PICK ONE!
+              </div>
+            )}
             
             <div 
-              className={`w-64 h-64 rounded-full border-[6px] border-dashed border-white/60 flex flex-col items-center justify-center p-4 transition-all duration-500 ${image ? 'border-solid border-white scale-110' : 'hover:scale-105'}`}
+              className={`w-64 h-64 rounded-full border-[6px] border-dashed border-white/60 flex flex-col items-center justify-center p-4 transition-all duration-500 ${image || isProcessingImage ? 'border-solid border-white scale-105' : 'hover:scale-105'}`}
             >
               <div 
                 onClick={handleScan}
-                className={`w-full h-full rounded-full flex flex-col items-center justify-center cursor-pointer overflow-hidden border-[4px] border-black shadow-[12px_12px_0px_0px_rgba(0,0,0,0.3)] relative transition-all active:scale-90 ${image ? 'bg-black' : 'bg-white'}`}
+                className={`w-full h-full rounded-full flex flex-col items-center justify-center cursor-pointer overflow-hidden border-[4px] border-black shadow-[10px_10px_0px_0px_rgba(0,0,0,0.3)] relative transition-all active:scale-95 ${image || isProcessingImage ? 'bg-black' : 'bg-white'}`}
               >
-                {image ? (
+                {isProcessingImage ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-12 h-12 text-[#FFD100] animate-spin" />
+                    <span className="text-white font-fredoka font-black text-sm uppercase tracking-tighter">Preparing...</span>
+                  </div>
+                ) : image ? (
                   <>
-                    <img src={image} alt="Target" className={`w-full h-full object-cover ${isLoading ? 'opacity-60 grayscale' : 'opacity-90'}`} />
+                    <img src={image} alt="Wound" className={`w-full h-full object-cover ${isLoading ? 'opacity-40 grayscale' : 'opacity-100'}`} />
                     {isLoading && <div className="scanning-line"></div>}
-                    <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center">
+                    <div className="absolute inset-0 bg-black/20 flex flex-col items-center justify-center">
                        {isLoading ? (
                          <div className="flex flex-col items-center gap-4">
                            <Loader2 className="w-16 h-16 text-[#FFD100] animate-spin" />
-                           <span className="text-[#FFD100] font-fredoka font-black text-xl tracking-wider uppercase [text-shadow:2px_2px_0px_#000]">Thinking...</span>
+                           <span className="text-[#FFD100] font-fredoka font-black text-xl tracking-wider uppercase [text-shadow:2px_2px_0px_#000]">Analyzing...</span>
                          </div>
                        ) : (
-                         <div className="flex flex-col items-center group-hover:scale-110 transition-transform">
-                           <Zap className="w-14 h-14 text-[#FFD100] fill-[#FFD100] mb-2 drop-shadow-[0_4px_0_rgba(0,0,0,1)]" />
-                           <span className="text-white font-fredoka font-black text-lg tracking-widest uppercase [text-shadow:2px_2px_0px_#000]">ANALYZE!</span>
+                         <div className="flex flex-col items-center animate-bounce">
+                           <Zap className="w-16 h-16 text-[#FFD100] fill-[#FFD100] mb-2 drop-shadow-[0_4px_0_rgba(0,0,0,1)]" />
+                           <span className="text-white font-fredoka font-black text-lg uppercase [text-shadow:2px_2px_0px_#000]">TAP TO START</span>
                          </div>
                        )}
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="bg-[#7C3AED] p-5 rounded-full mb-3 border-[3px] border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                      <Camera className="w-12 h-12 text-white" />
+                    <div className="bg-[#7C3AED] p-6 rounded-full mb-3 border-[3px] border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                      <Camera className="w-14 h-14 text-white" />
                     </div>
-                    <span className="text-[#2D3436] font-fredoka font-black text-lg tracking-tighter uppercase">SCAN IT!</span>
+                    <span className="text-[#2D3436] font-fredoka font-black text-lg tracking-tighter uppercase">SCAN WOUND</span>
                   </>
                 )}
               </div>
             </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-6 w-full animate-pop" style={{ animationDelay: '0.4s' }}>
+        {/* Action Buttons: Native UI Style */}
+        <div className="grid grid-cols-2 gap-4 w-full animate-pop">
           <button 
-            onClick={() => setIsCameraOpen(true)}
-            className="cartoon-btn bg-[#FFD100] rounded-3xl py-8 flex flex-col items-center justify-center gap-2"
+            onClick={() => cameraCaptureRef.current?.click()}
+            className="cartoon-btn bg-[#FFD100] rounded-[32px] py-8 flex flex-col items-center justify-center gap-3 active:bg-yellow-500"
           >
             <Camera className="w-10 h-10 text-black" />
-            <span className="font-fredoka font-black text-black text-sm uppercase">Camera</span>
+            <span className="font-fredoka font-black text-black text-xs uppercase tracking-wider">Use Camera</span>
           </button>
           
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="cartoon-btn bg-[#2ECC71] rounded-3xl py-8 flex flex-col items-center justify-center gap-2"
+            className="cartoon-btn bg-[#2ECC71] rounded-[32px] py-8 flex flex-col items-center justify-center gap-3 active:bg-green-600"
           >
             <ImageIcon className="w-10 h-10 text-black" />
-            <span className="font-fredoka font-black text-black text-sm uppercase">Gallery</span>
+            <span className="font-fredoka font-black text-black text-xs uppercase tracking-wider">Pick Photo</span>
           </button>
         </div>
 
-        {/* Context Input */}
-        <div className="w-full cartoon-card p-8 space-y-4 animate-pop" style={{ animationDelay: '0.5s' }}>
+        {/* Story Input */}
+        <div className="w-full cartoon-card p-6 space-y-3 animate-pop">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">🗣️</span>
-            <span className="font-fredoka font-black text-md uppercase text-gray-800">What's the Story?</span>
+            <span className="text-3xl">📝</span>
+            <span className="font-fredoka font-black text-sm uppercase text-gray-700 tracking-tight">Add context (Optional)</span>
           </div>
           <textarea 
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Tell me where it hurts... (Optional)"
-            className="w-full h-32 bg-yellow-50 rounded-2xl p-5 text-lg font-medium focus:outline-none border-[3px] border-black focus:ring-0 resize-none placeholder:text-gray-400"
+            placeholder="Tell me how it happened..."
+            className="w-full h-28 bg-yellow-50 rounded-2xl p-5 text-lg font-medium focus:outline-none border-[3px] border-black resize-none placeholder:text-gray-400"
           />
         </div>
 
-        {/* Error Message */}
+        {/* Error Notification */}
         {error && (
           <div className="bg-[#FF6B6B] border-[4px] border-black text-white p-5 rounded-3xl flex items-center gap-4 w-full shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] animate-bounce">
             <AlertCircle className="w-8 h-8 flex-shrink-0" />
-            <p className="text-lg font-fredoka font-bold">{error}</p>
+            <p className="text-base font-fredoka font-bold leading-snug">{error}</p>
           </div>
         )}
 
-        {/* Sticky Disclaimer */}
-        <div className="w-full cartoon-card p-6 bg-white flex items-center gap-5 animate-pop" style={{ animationDelay: '0.6s' }}>
-           <div className="bg-[#FFD100] p-4 rounded-full border-2 border-black flex-shrink-0">
+        {/* Bottom Disclaimer Card */}
+        <div className="w-full cartoon-card p-5 bg-white flex items-start gap-5 animate-pop">
+           <div className="bg-[#FFD100] p-4 rounded-2xl border-2 border-black flex-shrink-0">
              <Stethoscope className="w-8 h-8 text-black" />
            </div>
-           <p className="text-xs font-fredoka font-bold leading-snug text-gray-800">
-             <span className="text-[#FF4757] text-sm font-black">HEADS UP!</span> I'm a robot buddy, not a doc! Always check with a real human professional if it's serious! 🚨
-           </p>
+           <div className="space-y-1">
+             <p className="text-sm font-fredoka font-black text-[#FF4757] uppercase tracking-tighter">Medical Disclaimer</p>
+             <p className="text-[11px] font-fredoka font-bold leading-tight text-gray-700">
+               I'm a robot assistant. My analysis is for general guidance only. For emergencies, call your local medical services immediately.
+             </p>
+           </div>
         </div>
       </div>
 
-      {/* Camera Live Modal */}
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center p-4">
-           <button 
-             onClick={stopCamera}
-             className="absolute top-8 right-8 z-[110] bg-white p-4 rounded-full border-[3px] border-black"
-           >
-             <X className="w-8 h-8 text-black" />
-           </button>
-           
-           <div className="relative w-full aspect-square max-w-sm rounded-[40px] overflow-hidden border-[6px] border-white shadow-[0_0_50px_rgba(255,255,255,0.3)] bg-gray-900">
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted
-                className="w-full h-full object-cover"
-              />
-              {/* Target Overlay */}
-              <div className="absolute inset-0 border-[40px] border-black/30 pointer-events-none flex items-center justify-center">
-                 <div className="w-full h-full border-[4px] border-dashed border-white/60 rounded-full" />
-              </div>
-           </div>
+      {/* APK Compatible Native Hooks */}
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        ref={cameraCaptureRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
+      <input 
+        type="file" 
+        accept="image/*" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
 
-           <div className="mt-12 flex items-center gap-10">
-              <button 
-                onClick={switchCamera}
-                className="bg-white/20 p-5 rounded-full border-2 border-white/40 active:scale-90 transition-transform"
-              >
-                <RefreshCw className="w-8 h-8 text-white" />
-              </button>
-              
-              <button 
-                onClick={capturePhoto}
-                className="w-24 h-24 bg-white rounded-full border-[6px] border-black shadow-[0_0_0_8px_rgba(255,255,255,0.2)] active:scale-90 transition-all flex items-center justify-center"
-              >
-                <div className="w-16 h-16 bg-red-500 rounded-full border-4 border-black" />
-              </button>
-              
-              <div className="w-16 h-16" /> {/* Spacer */}
-           </div>
-           
-           <p className="mt-8 text-white font-fredoka font-bold text-lg opacity-80">Center your injury in the circle!</p>
-           
-           <canvas ref={canvasRef} className="hidden" />
-        </div>
-      )}
+      {/* Hidden Canvas for High-Performance Compression */}
+      <canvas ref={canvasRef} className="hidden" />
 
-      {/* Hidden File Input */}
-      <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
-
-      {/* Result Modal */}
+      {/* Analysis Result Drawer */}
       {result && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end">
           <div className="bg-white w-full border-t-[8px] border-black rounded-t-[50px] max-h-[92vh] overflow-y-auto p-10 animate-slide-up">
@@ -354,9 +303,9 @@ const App: React.FC = () => {
                  <div className="bg-[#2ECC71] p-3 rounded-2xl border-[3px] border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                     <Sparkles className="w-8 h-8 text-white fill-white" />
                  </div>
-                 <h2 className="font-fredoka font-black text-3xl text-black">Looky Here!</h2>
+                 <h2 className="font-fredoka font-black text-3xl text-black uppercase tracking-tight">AI Report</h2>
               </div>
-              <button onClick={reset} className="p-3 bg-gray-100 hover:bg-gray-200 border-[3px] border-black rounded-full transition-all active:scale-90">
+              <button onClick={reset} className="p-3 bg-gray-100 border-[3px] border-black rounded-full active:scale-90 transition-transform">
                 <X className="w-8 h-8 text-black" />
               </button>
             </div>
@@ -364,22 +313,22 @@ const App: React.FC = () => {
             <div className="space-y-10">
                <div className="cartoon-card bg-purple-50 p-8">
                   <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-gray-500">I Found a...</h3>
-                    <span className={`px-5 py-2 rounded-xl text-xs font-black uppercase border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] ${
+                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400">Identity</h3>
+                    <span className={`px-6 py-2 rounded-xl text-xs font-black uppercase border-3 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${
                       result.severity === 'Low' ? 'bg-green-400' :
                       result.severity === 'Medium' ? 'bg-yellow-400' : 'bg-red-400 text-white'
                     }`}>
                       {result.severity} Risk
                     </span>
                   </div>
-                  <p className="font-fredoka font-black text-4xl text-[#7C3AED] mb-4 drop-shadow-[2px_2px_0_#000]">{result.woundType}</p>
-                  <p className="text-gray-800 font-medium text-lg leading-relaxed bg-white/50 p-4 rounded-2xl border-2 border-dashed border-purple-200">{result.description}</p>
+                  <p className="font-fredoka font-black text-4xl text-[#7C3AED] mb-4 [text-shadow:2px_2px_0px_#000]">{result.woundType}</p>
+                  <p className="text-gray-800 font-medium text-lg leading-relaxed">{result.description}</p>
                </div>
 
                <div className="space-y-6">
                  <h3 className="font-fredoka font-black text-2xl text-black flex items-center gap-3">
                     <div className="w-4 h-10 bg-[#FFD100] rounded-lg border-2 border-black" />
-                    How to Fix it!
+                    How to Handle This
                  </h3>
                  <div className="space-y-4">
                    {result.firstAidSteps.map((step, idx) => (
@@ -387,38 +336,37 @@ const App: React.FC = () => {
                         <div className="bg-[#7C3AED] text-white w-10 h-10 rounded-xl border-2 border-black flex items-center justify-center text-xl font-black flex-shrink-0 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
                           {idx + 1}
                         </div>
-                        <p className="text-lg text-gray-800 font-bold">{step}</p>
+                        <p className="text-lg text-gray-800 font-bold leading-tight">{step}</p>
                      </div>
                    ))}
                  </div>
                </div>
 
                <div className="bg-blue-400 border-[4px] border-black rounded-[40px] p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-                 <div className="flex items-center gap-3 mb-4">
-                    <span className="text-3xl">💡</span>
-                    <h3 className="font-fredoka font-black text-2xl text-white [text-shadow:2px_2px_0px_#000]">AidPal Pro Tip:</h3>
-                 </div>
-                 <p className="text-lg text-white font-bold italic leading-snug">"{result.recommendation}"</p>
+                 <p className="text-white font-fredoka font-black text-2xl mb-2 flex items-center gap-3">
+                   <span>💡</span> Pro Tip:
+                 </p>
+                 <p className="text-lg text-white font-bold leading-snug italic">"{result.recommendation}"</p>
                </div>
 
                <button 
                  onClick={reset}
-                 className="w-full bg-[#FFD100] text-black border-[4px] border-black font-fredoka font-black text-2xl py-8 rounded-[40px] shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all active:scale-95 mb-10"
+                 className="w-full bg-[#FFD100] text-black border-[4px] border-black font-fredoka font-black text-2xl py-8 rounded-[40px] shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all mb-10"
                >
-                 AWESOME, BYE! 👋
+                 THANKS, AIDPAL! 👋
                </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* History Drawer */}
+      {/* History Slide-In Drawer */}
       {showHistory && (
         <div className="fixed inset-0 z-50 bg-black/90 flex justify-end">
           <div className="bg-[#7C3AED] w-[90%] max-w-md h-full overflow-y-auto p-10 border-l-[8px] border-black animate-slide-left">
             <div className="flex justify-between items-center mb-12">
-              <h2 className="font-fredoka font-black text-4xl text-white [text-shadow:4px_4px_0px_#000]">Old Ouchies</h2>
-              <button onClick={() => setShowHistory(false)} className="p-3 bg-white border-[3px] border-black rounded-full shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all">
+              <h2 className="font-fredoka font-black text-4xl text-white [text-shadow:4px_4px_0px_#000]">History</h2>
+              <button onClick={() => setShowHistory(false)} className="p-3 bg-white border-[3px] border-black rounded-full shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:scale-90">
                 <X className="w-8 h-8 text-black" />
               </button>
             </div>
@@ -426,7 +374,7 @@ const App: React.FC = () => {
             <div className="space-y-6">
               {history.length === 0 ? (
                 <div className="text-center py-20 bg-white/10 rounded-[40px] border-4 border-dashed border-white/20">
-                  <p className="text-white font-fredoka font-black text-2xl opacity-60">Nothing here yet! 💨</p>
+                  <p className="text-white font-fredoka font-black text-2xl opacity-60">Nothing here yet!</p>
                 </div>
               ) : (
                 history.map((item) => (
@@ -437,7 +385,7 @@ const App: React.FC = () => {
                       setImage(item.image);
                       setShowHistory(false);
                     }}
-                    className="flex items-center gap-5 p-6 bg-white rounded-[30px] border-[4px] border-black cursor-pointer shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-1 hover:-translate-x-1 hover:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] transition-all"
+                    className="flex items-center gap-5 p-6 bg-white rounded-[32px] border-[4px] border-black cursor-pointer shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] active:scale-95 transition-all"
                   >
                     <img src={item.image} alt="Wound" className="w-20 h-20 rounded-2xl border-[3px] border-black object-cover flex-shrink-0" />
                     <div className="flex-grow min-w-0">
