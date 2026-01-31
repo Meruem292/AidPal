@@ -7,6 +7,7 @@ const App: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -14,6 +15,7 @@ const App: React.FC = () => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraCaptureRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Load history from localStorage
   useEffect(() => {
@@ -27,22 +29,60 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Process and Resize Image to prevent WebView crashes
+  const processImage = (file: File) => {
+    setIsProcessingImage(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Calculate new dimensions (max 1024px to be safe in WebViews)
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Convert to optimized JPEG
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        setImage(dataUrl);
+        setIsProcessingImage(false);
+        setError(null);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-        setError(null);
-        // If we just picked an image, we don't auto-scan yet to let user add description
-      };
-      reader.readAsDataURL(file);
+      processImage(file);
     }
   };
 
   const handleScan = async () => {
     if (!image) {
-      // If no image, default to opening camera
       cameraCaptureRef.current?.click();
       return;
     }
@@ -129,21 +169,25 @@ const App: React.FC = () => {
 
         {/* Scan Area */}
         <div className="relative group animate-pop" style={{ animationDelay: '0.3s' }}>
-            {/* Action Hint */}
-            {!image && (
+            {!image && !isProcessingImage && (
               <div className="absolute -top-5 -right-5 bg-[#FF6B6B] text-white text-xs font-black px-4 py-2 rounded-xl rotate-12 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-20">
                 SNAP ME!
               </div>
             )}
             
             <div 
-              className={`w-64 h-64 rounded-full border-[6px] border-dashed border-white/60 flex flex-col items-center justify-center p-4 transition-all duration-500 ${image ? 'border-solid border-white scale-110' : 'hover:scale-105'}`}
+              className={`w-64 h-64 rounded-full border-[6px] border-dashed border-white/60 flex flex-col items-center justify-center p-4 transition-all duration-500 ${image || isProcessingImage ? 'border-solid border-white scale-110' : 'hover:scale-105'}`}
             >
               <div 
                 onClick={handleScan}
-                className={`w-full h-full rounded-full flex flex-col items-center justify-center cursor-pointer overflow-hidden border-[4px] border-black shadow-[12px_12px_0px_0px_rgba(0,0,0,0.3)] relative transition-all active:scale-90 ${image ? 'bg-black' : 'bg-white'}`}
+                className={`w-full h-full rounded-full flex flex-col items-center justify-center cursor-pointer overflow-hidden border-[4px] border-black shadow-[12px_12px_0px_0px_rgba(0,0,0,0.3)] relative transition-all active:scale-90 ${image || isProcessingImage ? 'bg-black' : 'bg-white'}`}
               >
-                {image ? (
+                {isProcessingImage ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-10 h-10 text-[#FFD100] animate-spin" />
+                    <span className="text-white font-fredoka font-black text-xs">PREPARING...</span>
+                  </div>
+                ) : image ? (
                   <>
                     <img src={image} alt="Target" className={`w-full h-full object-cover ${isLoading ? 'opacity-60 grayscale' : 'opacity-90'}`} />
                     {isLoading && <div className="scanning-line"></div>}
@@ -226,7 +270,6 @@ const App: React.FC = () => {
       </div>
 
       {/* Hidden Native Inputs */}
-      {/* This 'capture' attribute is the key for Kodular WebView compatibility */}
       <input 
         type="file" 
         accept="image/*" 
@@ -242,6 +285,9 @@ const App: React.FC = () => {
         onChange={handleImageUpload} 
         className="hidden" 
       />
+
+      {/* Hidden Canvas for resizing */}
+      <canvas ref={canvasRef} className="hidden" />
 
       {/* Result Modal */}
       {result && (
