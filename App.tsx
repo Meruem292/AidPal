@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope, Image as ImageIcon, RefreshCw } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, History, AlertCircle, X, ChevronRight, Loader2, Sparkles, Heart, Zap, Stethoscope, Image as ImageIcon } from 'lucide-react';
 import { analyzeWound } from './geminiService.ts';
 import { AnalysisResult, HistoryItem } from './types.ts';
 
@@ -12,14 +12,8 @@ const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  // Camera Modal State
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
-  
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureRef = useRef<HTMLInputElement>(null);
 
   // Load history from localStorage
   useEffect(() => {
@@ -33,75 +27,6 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Camera handling
-  const startCamera = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facingMode, width: { ideal: 1080 }, height: { ideal: 1080 } },
-        audio: false
-      });
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setIsCameraOpen(true);
-      setError(null);
-    } catch (err) {
-      console.error("Camera error:", err);
-      setError("I couldn't access your camera! Please check permissions. 📸");
-    }
-  }, [facingMode]);
-
-  const stopCamera = useCallback(() => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
-    setIsCameraOpen(false);
-  }, [cameraStream]);
-
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      
-      if (context) {
-        // Set canvas to square crop
-        const size = Math.min(video.videoWidth, video.videoHeight);
-        canvas.width = size;
-        canvas.height = size;
-        
-        const startX = (video.videoWidth - size) / 2;
-        const startY = (video.videoHeight - size) / 2;
-        
-        context.drawImage(video, startX, startY, size, size, 0, 0, size, size);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        setImage(dataUrl);
-        stopCamera();
-        setError(null);
-      }
-    }
-  };
-
-  const switchCamera = () => {
-    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-    stopCamera();
-    // Restarting is handled by the useEffect watching facingMode/isCameraOpen
-  };
-
-  useEffect(() => {
-    if (isCameraOpen) {
-      startCamera();
-    }
-    return () => {
-      // Cleanup stream on unmount
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [isCameraOpen, facingMode]);
-
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -109,6 +34,7 @@ const App: React.FC = () => {
       reader.onloadend = () => {
         setImage(reader.result as string);
         setError(null);
+        // If we just picked an image, we don't auto-scan yet to let user add description
       };
       reader.readAsDataURL(file);
     }
@@ -116,9 +42,11 @@ const App: React.FC = () => {
 
   const handleScan = async () => {
     if (!image) {
-      setIsCameraOpen(true);
+      // If no image, default to opening camera
+      cameraCaptureRef.current?.click();
       return;
     }
+    
     setIsLoading(true);
     setError(null);
     try {
@@ -201,9 +129,12 @@ const App: React.FC = () => {
 
         {/* Scan Area */}
         <div className="relative group animate-pop" style={{ animationDelay: '0.3s' }}>
-            <div className="absolute -top-5 -right-5 bg-[#FF6B6B] text-white text-xs font-black px-4 py-2 rounded-xl rotate-12 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-20">
-              CLICK ME!
-            </div>
+            {/* Action Hint */}
+            {!image && (
+              <div className="absolute -top-5 -right-5 bg-[#FF6B6B] text-white text-xs font-black px-4 py-2 rounded-xl rotate-12 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-20">
+                SNAP ME!
+              </div>
+            )}
             
             <div 
               className={`w-64 h-64 rounded-full border-[6px] border-dashed border-white/60 flex flex-col items-center justify-center p-4 transition-all duration-500 ${image ? 'border-solid border-white scale-110' : 'hover:scale-105'}`}
@@ -235,7 +166,7 @@ const App: React.FC = () => {
                     <div className="bg-[#7C3AED] p-5 rounded-full mb-3 border-[3px] border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                       <Camera className="w-12 h-12 text-white" />
                     </div>
-                    <span className="text-[#2D3436] font-fredoka font-black text-lg tracking-tighter uppercase">SCAN IT!</span>
+                    <span className="text-[#2D3436] font-fredoka font-black text-lg tracking-tighter uppercase">TAP TO START</span>
                   </>
                 )}
               </div>
@@ -245,7 +176,7 @@ const App: React.FC = () => {
         {/* Action Buttons */}
         <div className="grid grid-cols-2 gap-6 w-full animate-pop" style={{ animationDelay: '0.4s' }}>
           <button 
-            onClick={() => setIsCameraOpen(true)}
+            onClick={() => cameraCaptureRef.current?.click()}
             className="cartoon-btn bg-[#FFD100] rounded-3xl py-8 flex flex-col items-center justify-center gap-2"
           >
             <Camera className="w-10 h-10 text-black" />
@@ -294,56 +225,23 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Camera Live Modal */}
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center p-4">
-           <button 
-             onClick={stopCamera}
-             className="absolute top-8 right-8 z-[110] bg-white p-4 rounded-full border-[3px] border-black"
-           >
-             <X className="w-8 h-8 text-black" />
-           </button>
-           
-           <div className="relative w-full aspect-square max-w-sm rounded-[40px] overflow-hidden border-[6px] border-white shadow-[0_0_50px_rgba(255,255,255,0.3)] bg-gray-900">
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted
-                className="w-full h-full object-cover"
-              />
-              {/* Target Overlay */}
-              <div className="absolute inset-0 border-[40px] border-black/30 pointer-events-none flex items-center justify-center">
-                 <div className="w-full h-full border-[4px] border-dashed border-white/60 rounded-full" />
-              </div>
-           </div>
-
-           <div className="mt-12 flex items-center gap-10">
-              <button 
-                onClick={switchCamera}
-                className="bg-white/20 p-5 rounded-full border-2 border-white/40 active:scale-90 transition-transform"
-              >
-                <RefreshCw className="w-8 h-8 text-white" />
-              </button>
-              
-              <button 
-                onClick={capturePhoto}
-                className="w-24 h-24 bg-white rounded-full border-[6px] border-black shadow-[0_0_0_8px_rgba(255,255,255,0.2)] active:scale-90 transition-all flex items-center justify-center"
-              >
-                <div className="w-16 h-16 bg-red-500 rounded-full border-4 border-black" />
-              </button>
-              
-              <div className="w-16 h-16" /> {/* Spacer */}
-           </div>
-           
-           <p className="mt-8 text-white font-fredoka font-bold text-lg opacity-80">Center your injury in the circle!</p>
-           
-           <canvas ref={canvasRef} className="hidden" />
-        </div>
-      )}
-
-      {/* Hidden File Input */}
-      <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
+      {/* Hidden Native Inputs */}
+      {/* This 'capture' attribute is the key for Kodular WebView compatibility */}
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        ref={cameraCaptureRef} 
+        onChange={handleImageUpload} 
+        className="hidden" 
+      />
+      <input 
+        type="file" 
+        accept="image/*" 
+        ref={fileInputRef} 
+        onChange={handleImageUpload} 
+        className="hidden" 
+      />
 
       {/* Result Modal */}
       {result && (
